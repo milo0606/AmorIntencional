@@ -1,494 +1,347 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { 
-  Upload, 
-  FileSpreadsheet, 
-  User, 
-  Users, 
-  QrCode, 
-  Search, 
-  Trash2, 
-  ExternalLink, 
-  Info, 
-  Phone, 
-  Heart, 
-  X, 
-  Camera, 
-  CheckCircle2, 
-  ScanLine, 
-  AlertCircle, 
-  RefreshCcw, 
-  Zap, 
-  MessageSquare, 
-  Settings, 
-  Send, 
-  Loader2, 
-  Check, 
-  Calendar, 
-  Clock 
-} from 'lucide-react';
-
-/**
- * App Component
- * Plataforma "Amor Intencional" para gestión de invitados.
- * Configurada con las nuevas credenciales de Green API.
- */
-export default function App() {
-  const [data, setData] = useState([]);
-  const [view, setView] = useState('list');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [isDragging, setIsDragging] = useState(false);
-  const [libsLoaded, setLibsLoaded] = useState({ xlsx: false, scanner: false });
-  const [selectedGuest, setSelectedGuest] = useState(null);
-  const [scannerResult, setScannerResult] = useState(null);
-  const [isScannerActive, setIsScannerActive] = useState(false);
-  
-  // Nuevas credenciales de Green API según captura c18d93
-  const [showApiConfig, setShowApiConfig] = useState(false);
-  const [greenApiCreds, setGreenApiCreds] = useState({
-    apiUrl: 'https://7107.api.greenapi.com',
-    idInstance: '7107612995',
-    apiTokenInstance: '5bd6224b3fa44967bffc43aca236af3a4ddda28278bc4dfcbb'
-  });
-  
-  const [isSending, setIsSending] = useState(false);
-  const [sendProgress, setSendProgress] = useState({ current: 0, total: 0, lastContact: '', status: '' });
-  const [showMassSendConfirm, setShowMassSendConfirm] = useState(false);
-  
-  const fileInputRef = useRef(null);
-  const html5QrCodeRef = useRef(null);
-  const isProcessingRef = useRef(false);
-
-  useEffect(() => {
-    const loadScript = (src, key) => {
-      if (document.querySelector(`script[src="${src}"]`)) {
-        setLibsLoaded(prev => ({ ...prev, [key]: true }));
-        return;
-      }
-      const script = document.createElement('script');
-      script.src = src;
-      script.async = true;
-      script.onload = () => setLibsLoaded(prev => ({ ...prev, [key]: true }));
-      document.head.appendChild(script);
-    };
-
-    loadScript("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js", 'xlsx');
-    loadScript("https://unpkg.com/html5-qrcode", 'scanner');
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-    const manageScanner = async () => {
-      if (view === 'scanner' && libsLoaded.scanner && !scannerResult) {
-        if (mounted) await startScanner();
-      } else {
-        if (mounted) await stopScanner();
-      }
-    };
-    manageScanner();
-    return () => {
-      mounted = false;
-      stopScanner();
-    };
-  }, [view, libsLoaded.scanner, scannerResult]);
-
-  const startScanner = async () => {
-    if (isProcessingRef.current) return;
-    isProcessingRef.current = true;
-    try {
-      if (!html5QrCodeRef.current) {
-        html5QrCodeRef.current = new window.Html5Qrcode("reader");
-      }
-      if (html5QrCodeRef.current.isScanning) {
-        isProcessingRef.current = false;
-        return;
-      }
-      const config = { fps: 15, qrbox: { width: 280, height: 280 }, aspectRatio: 1.0 };
-      await html5QrCodeRef.current.start(
-        { facingMode: "environment" },
-        config,
-        (decodedText) => {
-          const idMatch = decodedText.match(/AP\d{4}/);
-          const scannedId = idMatch ? idMatch[0] : decodedText;
-          const guest = data.find(g => g.id === scannedId);
-          if (guest) setScannerResult(guest);
-        },
-        () => {}
-      );
-      setIsScannerActive(true);
-    } catch (err) {
-      console.error("Error al iniciar cámara:", err);
-      setIsScannerActive(false);
-    } finally {
-      isProcessingRef.current = false;
-    }
-  };
-
-  const stopScanner = async () => {
-    if (isProcessingRef.current) return;
-    if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-      isProcessingRef.current = true;
-      try {
-        await html5QrCodeRef.current.stop();
-        setIsScannerActive(false);
-      } catch (err) {
-        if (!err.includes("already under transition")) console.error(err);
-      } finally {
-        isProcessingRef.current = false;
-      }
-    }
-  };
-
-  const formatPhoneNumber = (phone) => {
-    let cleaned = String(phone).replace(/\D/g, ''); 
-    if (cleaned.length === 10) cleaned = '1' + cleaned; 
-    return `${cleaned}@c.us`;
-  };
-
-  const callGreenApi = async (guest) => {
-    const { apiUrl, idInstance, apiTokenInstance } = greenApiCreds;
-    if (!apiTokenInstance) throw new Error("Falta el API Token Instance");
-
-    const url = `${apiUrl}/waInstance${idInstance}/sendFileByUrl/${apiTokenInstance}`;
-    
-    // Concatenación de nombres con " y "
-    const partnerInfo = guest.pareja !== 'N/A' ? ` y ${guest.pareja}` : '';
-    const caption = `Hola ${guest.nombre}${partnerInfo}, gracias por confirmar su asistencia, a continuación, los datos del evento:\n\n🆔 ${guest.id}\n📅 20 de noviembre 2026\n⌚ 7:00 PM\n\nInformación importante: Al llegar, presenta el código QR que te enviamos junto a este mensaje.`;
-
-    const payload = {
-      chatId: formatPhoneNumber(guest.contacto),
-      urlFile: guest.qrUrl,
-      fileName: `invitacion_${guest.id}.png`,
-      caption: caption
-    };
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errData = await response.json();
-      throw new Error(errData.message || "Error al conectar con Green API");
-    }
-    
-    return true;
-  };
-
-  const handleMassSend = async () => {
-    if (data.length === 0) return;
-    if (!greenApiCreds.apiTokenInstance) {
-      alert("Por favor, ingresa tu API Token Instance en los ajustes.");
-      setShowApiConfig(true);
-      return;
-    }
-
-    setShowMassSendConfirm(false);
-    setIsSending(true);
-    
-    let successCount = 0;
-    let failCount = 0;
-
-    for (let i = 0; i < data.length; i++) {
-      const guest = data[i];
-      setSendProgress({ 
-        current: i + 1, 
-        total: data.length, 
-        lastContact: guest.contacto,
-        status: `Enviando invitación multimedia a ${guest.nombre}...`
-      });
-
-      try {
-        await callGreenApi(guest);
-        successCount++;
-        // Retardo para evitar bloqueos
-        await new Promise(resolve => setTimeout(resolve, 1500));
-      } catch (error) {
-        console.error(`Fallo en ${guest.nombre}:`, error);
-        failCount++;
-      }
-    }
-
-    setIsSending(false);
-    alert(`Proceso masivo finalizado.\n✅ Éxito: ${successCount}\n❌ Error: ${failCount}`);
-  };
-
-  const handleSingleSend = async (guest) => {
-    if (!greenApiCreds.apiTokenInstance) {
-      alert("Configura el API Token primero.");
-      setShowApiConfig(true);
-      return;
-    }
-    setIsSending(true);
-    setSendProgress({ current: 1, total: 1, lastContact: guest.contacto, status: 'Preparando envío...' });
-    try {
-      await callGreenApi(guest);
-      alert(`Invitación enviada exitosamente a ${guest.nombre}`);
-    } catch (error) {
-      alert(`Error enviando a ${guest.nombre}: ${error.message}`);
-    } finally {
-      setIsSending(false);
-    }
-  };
-
-  const findValue = (row, possibleKeys) => {
-    const keys = Object.keys(row);
-    for (const pKey of possibleKeys) {
-      const match = keys.find(k => k.toLowerCase().trim() === pKey.toLowerCase().trim());
-      if (match) return row[match];
-    }
-    return 'N/A';
-  };
-
-  const processFile = (file) => {
-    if (!window.XLSX) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const workbook = window.XLSX.read(evt.target.result, { type: 'binary' });
-        const rawData = window.XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
-        const formattedData = rawData.map((row, index) => {
-          const guestId = `AP${String(index + 1).padStart(4, '0')}`;
-          const nombre = findValue(row, ['Nombre', 'invitado']);
-          const pareja = findValue(row, ['nombre pareja', 'pareja', 'acompañante']);
-          const contacto = String(findValue(row, ['Contacto', 'telefono', 'celular'])).replace(/\s+/g, '');
-          
-          const qrData = `ID: ${guestId}\nInvitado: ${nombre}\nPareja: ${pareja}\nContacto: ${contacto}`;
-          const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qrData)}`;
-
-          return { id: guestId, nombre, pareja, contacto, status: 'No escaneada', qrUrl };
-        });
-        setData(formattedData);
-      } catch (error) { console.error(error); }
-    };
-    reader.readAsBinaryString(file);
-  };
-
-  const confirmCheckIn = (id) => {
-    setData(prev => prev.map(g => g.id === id ? { ...g, status: 'Escaneada' } : g));
-    setScannerResult(null);
-  };
-
-  const filteredData = data.filter(item => 
-    item.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.id.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
-      <nav className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-30 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <div className="bg-rose-500 p-1.5 rounded-lg text-white shadow-md">
-              <Heart size={18} fill="currentColor" />
-            </div>
-            <span className="text-lg font-black text-slate-800 tracking-tight uppercase">Amor Intencional</span>
-          </div>
-
-          <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200">
-            <button onClick={() => setView('list')} className={`flex items-center space-x-2 px-5 py-1.5 rounded-xl text-xs font-black transition-all ${view === 'list' ? 'bg-white shadow-sm text-rose-600' : 'text-slate-500 hover:text-slate-800'}`}>
-              <Users size={14} /> <span>LISTADO</span>
-            </button>
-            <button onClick={() => setView('scanner')} disabled={data.length === 0} className={`flex items-center space-x-2 px-5 py-1.5 rounded-xl text-xs font-black transition-all ${data.length === 0 ? 'opacity-30' : ''} ${view === 'scanner' ? 'bg-white shadow-sm text-rose-600' : 'text-slate-500 hover:text-slate-800'}`}>
-              <Camera size={14} /> <span>ESCÁNER</span>
-            </button>
-          </div>
-
-          <div className="flex items-center space-x-2">
-            <button onClick={() => setShowApiConfig(true)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors" title="Configuración Green API"><Settings size={18} /></button>
-            {data.length > 0 && <button onClick={() => { setData([]); setView('list'); }} className="p-2 text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={18} /></button>}
-          </div>
-        </div>
-      </nav>
-
-      <main className="max-w-7xl mx-auto px-4 py-6">
-        {data.length === 0 ? (
-          <div className="max-w-xl mx-auto mt-12 text-center">
-             <div 
-              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={(e) => { e.preventDefault(); setIsDragging(false); if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]); }}
-              className={`p-12 border-4 border-dashed rounded-[3rem] transition-all duration-300 bg-white shadow-sm border-slate-200 hover:border-slate-300`}
-            >
-              <div className="w-20 h-20 bg-rose-500 rounded-3xl flex items-center justify-center mx-auto mb-6 text-white shadow-lg shadow-rose-100">
-                <Upload size={32} />
-              </div>
-              <h2 className="text-2xl font-black text-slate-800 mb-2 tracking-tight uppercase">Amor Intencional</h2>
-              <p className="text-slate-500 text-sm mb-10 leading-relaxed tracking-tight">Sube tu lista de Excel para procesar los invitados.</p>
-              <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => processFile(e.target.files[0])} accept=".xlsx, .xls" />
-              <button onClick={() => fileInputRef.current.click()} className="w-full bg-slate-900 hover:bg-black text-white py-4 rounded-2xl font-black transition-all shadow-xl tracking-widest active:scale-95">SELECCIONAR EXCEL</button>
-            </div>
-          </div>
-        ) : view === 'scanner' ? (
-          <div className="max-w-md mx-auto animate-in fade-in zoom-in duration-300">
-            <div id="reader" className="w-full aspect-square bg-black rounded-[2.5rem] overflow-hidden shadow-2xl border-8 border-white grayscale-[0.3]"></div>
-          </div>
-        ) : (
-          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
-              <div className="relative w-full md:w-96">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                <input type="text" placeholder="Buscar invitado..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-4 focus:ring-rose-50 outline-none transition-all font-medium text-sm shadow-sm" />
-              </div>
-              
-              <div className="flex items-center space-x-3">
-                <button onClick={() => setShowMassSendConfirm(true)} className="bg-rose-500 hover:bg-rose-600 text-white px-6 py-3 rounded-2xl text-xs font-black flex items-center space-x-2 shadow-lg shadow-rose-100 transition-all active:scale-95 uppercase tracking-widest">
-                  <Send size={14} /> <span>Envío Masivo</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">ID</th>
-                    <th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Invitado</th>
-                    <th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Contacto</th>
-                    <th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Status</th>
-                    <th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredData.map((guest) => (
-                    <tr key={guest.id} className="hover:bg-slate-50/50 transition-colors group">
-                      <td className="px-6 py-4 font-mono text-xs font-bold text-rose-600 uppercase tracking-tighter">{guest.id}</td>
-                      <td className="px-6 py-4 font-bold text-sm text-slate-700">
-                        {guest.nombre}
-                        {guest.pareja !== 'N/A' && <span className="block text-[10px] text-slate-400 font-normal italic">Pareja: {guest.pareja}</span>}
-                      </td>
-                      <td className="px-6 py-4 font-mono text-xs text-slate-500 tracking-tight">{guest.contacto}</td>
-                      <td className="px-6 py-4 text-center">
-                        <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase border ${guest.status === 'Escaneada' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-amber-50 text-amber-600 border-amber-100'}`}>{guest.status}</span>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <div className="flex items-center justify-center space-x-2">
-                          <button onClick={() => setSelectedGuest(guest)} className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:text-rose-600 hover:bg-rose-50"><QrCode size={14} /></button>
-                          <button onClick={() => handleSingleSend(guest)} className="p-2 rounded-xl bg-emerald-50 text-emerald-500 hover:bg-emerald-600 hover:text-white transition-all shadow-sm" title="Enviar WhatsApp Green API"><MessageSquare size={14} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* MODAL CONFIGURACIÓN GREEN API */}
-      {showApiConfig && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md p-8 relative animate-in zoom-in-95">
-            <button onClick={() => setShowApiConfig(false)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-600"><X size={20} /></button>
-            <div className="flex items-center space-x-3 mb-6">
-              <div className="bg-rose-100 p-2 rounded-lg text-rose-600"><Settings size={20} /></div>
-              <h3 className="text-xl font-black text-slate-800 tracking-tight uppercase">Ajustes Green API</h3>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 block">API URL</label>
-                <input type="text" value={greenApiCreds.apiUrl} onChange={e => setGreenApiCreds({...greenApiCreds, apiUrl: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none font-mono text-xs" />
-              </div>
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 block">ID Instance</label>
-                <input type="text" value={greenApiCreds.idInstance} onChange={e => setGreenApiCreds({...greenApiCreds, idInstance: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none font-mono text-xs" />
-              </div>
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 block">API Token Instance</label>
-                <input type="password" value={greenApiCreds.apiTokenInstance} onChange={e => setGreenApiCreds({...greenApiCreds, apiTokenInstance: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none font-mono text-xs" />
-              </div>
-            </div>
-            <button onClick={() => setShowApiConfig(false)} className="w-full mt-6 bg-slate-900 text-white py-4 rounded-2xl font-black uppercase tracking-widest text-xs active:scale-95 transition-all">Guardar Cambios</button>
-          </div>
-        </div>
-      )}
-
-      {/* OVERLAY DE PROGRESO */}
-      {isSending && (
-        <div className="fixed inset-0 z-[100] bg-white/90 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in text-center">
-          <div className="relative mb-8">
-            <Loader2 className="animate-spin text-rose-600" size={64} />
-            <div className="absolute inset-0 flex items-center justify-center text-[10px] font-black text-rose-600">{Math.round((sendProgress.current / sendProgress.total) * 100)}%</div>
-          </div>
-          <h2 className="text-xl font-black text-slate-800 tracking-tight mb-2 uppercase tracking-tighter">Procesando Envío Masivo</h2>
-          <p className="text-slate-500 font-bold text-[10px] uppercase tracking-[0.3em] mb-4">Invitación {sendProgress.current} de {sendProgress.total}</p>
-          
-          <div className="bg-slate-900 text-slate-100 p-4 rounded-2xl font-mono text-[10px] w-full max-w-xs mb-8 shadow-2xl border-4 border-slate-800">
-             <p className="text-rose-400 opacity-70 mb-1 tracking-tighter">&gt; {sendProgress.status}</p>
-             <p className="text-rose-300 tracking-tighter">&gt; DESTINO: {sendProgress.lastContact}</p>
-          </div>
-
-          <div className="w-64 h-1.5 bg-slate-100 rounded-full overflow-hidden shadow-inner">
-            <div className="h-full bg-rose-500 transition-all duration-300 shadow-[0_0_10px_rgba(244,63,94,0.5)]" style={{ width: `${(sendProgress.current / sendProgress.total) * 100}%` }}></div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL CONFIRMACIÓN MASIVO */}
-      {showMassSendConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-8 text-center animate-in zoom-in-95">
-            <div className="w-16 h-16 bg-rose-100 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-4 font-black text-2xl">
-              <Heart size={32} fill="currentColor" />
-            </div>
-            <h3 className="text-xl font-black text-slate-800 mb-2 tracking-tight">¿Enviar masivamente?</h3>
-            <p className="text-slate-500 text-sm mb-8 leading-relaxed tracking-tight font-medium uppercase text-[9px] tracking-widest">Se enviará la invitación multimedia a los {data.length} invitados.</p>
-            <div className="flex flex-col space-y-3">
-              <button onClick={handleMassSend} className="w-full bg-rose-500 text-white py-4 rounded-2xl font-black uppercase tracking-widest text-xs active:scale-95 transition-all shadow-lg shadow-rose-100">SÍ, ENVIAR AHORA</button>
-              <button onClick={() => setShowMassSendConfirm(false)} className="w-full text-slate-400 font-bold text-xs uppercase tracking-widest py-2">Cancelar</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL DETALLE (QR) */}
-      {selectedGuest && !scannerResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedGuest(null)}>
-          <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-8 relative animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-            <div className="flex flex-col items-center">
-              <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 mb-6 shadow-inner"><img src={selectedGuest.qrUrl} alt="QR" className="w-48 h-48 rounded-xl" /></div>
-              <h3 className="text-xl font-black text-slate-800 tracking-tighter uppercase">{selectedGuest.nombre}</h3>
-              <p className="text-rose-600 font-black mb-6 tracking-widest uppercase">{selectedGuest.id}</p>
-              <div className="grid grid-cols-2 gap-2 w-full mb-6">
-                <button onClick={() => handleSingleSend(selectedGuest)} className="bg-emerald-50 text-emerald-600 py-3 rounded-xl text-[10px] font-black uppercase flex flex-col items-center justify-center hover:bg-emerald-100 transition-colors shadow-sm"><MessageSquare size={16} className="mb-1" /> WhatsApp</button>
-                <button onClick={() => { confirmCheckIn(selectedGuest.id); setSelectedGuest(null); }} disabled={selectedGuest.status === 'Escaneada'} className="bg-rose-500 disabled:bg-slate-100 disabled:text-slate-300 text-white py-3 rounded-xl text-[10px] font-black uppercase shadow-lg shadow-rose-100">Check-in</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL SCANNER RESULT */}
-      {scannerResult && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-slate-900/90 backdrop-blur-md">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden animate-in slide-in-from-bottom duration-300 shadow-2xl border-4 border-white">
-            <div className={`p-10 text-center ${scannerResult.status === 'Escaneada' ? 'bg-amber-50' : 'bg-rose-500 text-white'}`}>
-              <div className={`mx-auto w-20 h-20 rounded-3xl flex items-center justify-center mb-4 ${scannerResult.status === 'Escaneada' ? 'bg-amber-100 text-amber-600' : 'bg-white/20 text-white shadow-xl'}`}>
-                {scannerResult.status === 'Escaneada' ? <AlertCircle size={40} /> : <CheckCircle2 size={40} />}
-              </div>
-              <h3 className="text-2xl font-black uppercase tracking-tight">{scannerResult.status === 'Escaneada' ? 'Entrada Duplicada' : 'Acceso Válido'}</h3>
-              <p className="opacity-70 font-mono text-sm mt-1">{scannerResult.id}</p>
-            </div>
-            <div className="p-8 space-y-6">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 tracking-tighter"><p className="text-[10px] font-black text-slate-400 uppercase mb-1">Titular</p><p className="text-xs font-bold text-slate-800 line-clamp-1">{scannerResult.nombre}</p></div>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 tracking-tighter"><p className="text-[10px] font-black text-slate-400 uppercase mb-1">Pareja</p><p className="text-xs font-bold text-slate-800 line-clamp-1">{scannerResult.pareja}</p></div>
-              </div>
-              {scannerResult.status !== 'Escaneada' ? (
-                <button onClick={() => confirmCheckIn(scannerResult.id)} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-5 rounded-[1.5rem] font-black text-lg shadow-xl flex items-center justify-center space-x-3 transition-all active:scale-95 shadow-rose-100"><CheckCircle2 size={24} /><span>VALIDAR ENTRADA</span></button>
-              ) : (
-                <div className="bg-amber-100 text-amber-800 p-5 rounded-[1.5rem] text-center font-black text-xs border-2 border-amber-200 uppercase tracking-tighter">CÓDIGO YA ESCANEADO</div>
-              )}
-              <button onClick={() => setScannerResult(null)} className="w-full text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] py-2">Volver</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <style>{`
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amor Intencional - Gestión de Invitados</title>
+    <!-- Librerías Externas via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
         @keyframes scan { 0%, 100% { top: 0; } 50% { top: 100%; } }
-      `}</style>
-    </div>
-  );
-}
+        .scan-line { animation: scan 2s ease-in-out infinite; }
+        body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useRef, useEffect } = React;
+
+        // Helper para iconos Lucide en versión HTML directo
+        const Icon = ({ name, size = 18, className = "" }) => {
+            const iconRef = useRef(null);
+            useEffect(() => {
+                if (iconRef.current) {
+                    lucide.createIcons({ targets: [iconRef.current] });
+                }
+            }, [name]);
+            return <i data-lucide={name} style={{ width: size, height: size }} className={`inline-block ${className}`} ref={iconRef}></i>;
+        };
+
+        function App() {
+            const [data, setData] = useState([]);
+            const [view, setView] = useState('list');
+            const [searchTerm, setSearchTerm] = useState('');
+            const [isDragging, setIsDragging] = useState(false);
+            const [selectedGuest, setSelectedGuest] = useState(null);
+            const [scannerResult, setScannerResult] = useState(null);
+            const [isScannerActive, setIsScannerActive] = useState(false);
+            
+            // Credenciales de Green API actualizadas
+            const [showApiConfig, setShowApiConfig] = useState(false);
+            const [greenApiCreds, setGreenApiCreds] = useState({
+                apiUrl: 'https://7107.api.greenapi.com',
+                idInstance: '7107612995',
+                apiTokenInstance: '5bd6224b3fa44967bffc43aca236af3a4ddda28278bc4dfcbb'
+            });
+            
+            const [isSending, setIsSending] = useState(false);
+            const [sendProgress, setSendProgress] = useState({ current: 0, total: 0, status: '' });
+            const [showMassSendConfirm, setShowMassSendConfirm] = useState(false);
+            
+            const fileInputRef = useRef(null);
+            const html5QrCodeRef = useRef(null);
+            const isProcessingRef = useRef(false);
+
+            useEffect(() => {
+                if (view === 'scanner' && !scannerResult) {
+                    startScanner();
+                } else {
+                    stopScanner();
+                }
+                return () => stopScanner();
+            }, [view, scannerResult]);
+
+            const startScanner = async () => {
+                if (isProcessingRef.current) return;
+                isProcessingRef.current = true;
+                try {
+                    if (!html5QrCodeRef.current) html5QrCodeRef.current = new Html5Qrcode("reader");
+                    if (html5QrCodeRef.current.isScanning) { isProcessingRef.current = false; return; }
+                    await html5QrCodeRef.current.start(
+                        { facingMode: "environment" },
+                        { fps: 15, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 },
+                        (decodedText) => {
+                            const idMatch = decodedText.match(/AP\d{4}/);
+                            const scannedId = idMatch ? idMatch[0] : decodedText;
+                            const guest = data.find(g => g.id === scannedId);
+                            if (guest) setScannerResult(guest);
+                        }
+                    );
+                    setIsScannerActive(true);
+                } catch (err) { setIsScannerActive(false); }
+                finally { isProcessingRef.current = false; }
+            };
+
+            const stopScanner = async () => {
+                if (isProcessingRef.current) return;
+                if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+                    isProcessingRef.current = true;
+                    try { await html5QrCodeRef.current.stop(); setIsScannerActive(false); }
+                    catch (err) { }
+                    finally { isProcessingRef.current = false; }
+                }
+            };
+
+            const callGreenApi = async (guest) => {
+                const { apiUrl, idInstance, apiTokenInstance } = greenApiCreds;
+                const url = `${apiUrl}/waInstance${idInstance}/sendFileByUrl/${apiTokenInstance}`;
+                
+                // Estructura de mensaje: Hola [Nombre] y [Pareja]...
+                const partnerInfo = guest.pareja !== 'N/A' ? ` y ${guest.pareja}` : '';
+                const caption = `Hola ${guest.nombre}${partnerInfo}, gracias por confirmar su asistencia, a continuación, los datos del evento:\n\n🆔 ${guest.id}\n📅 20 de noviembre 2026\n⌚ 7:00 PM\n\nInformación importante: Al llegar, presenta el código QR que te enviamos junto a este mensaje.`;
+
+                const cleanedPhone = String(guest.contacto).replace(/\D/g, '');
+                const chatId = (cleanedPhone.length === 10 ? '1' + cleanedPhone : cleanedPhone) + '@c.us';
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chatId: chatId,
+                        urlFile: guest.qrUrl,
+                        fileName: `invitacion_${guest.id}.png`,
+                        caption: caption
+                    })
+                });
+
+                if (!response.ok) throw new Error("Fallo en API");
+                return true;
+            };
+
+            const handleMassSend = async () => {
+                setShowMassSendConfirm(false);
+                setIsSending(true);
+                let success = 0;
+                for (let i = 0; i < data.length; i++) {
+                    setSendProgress({ current: i + 1, total: data.length, status: `Enviando a ${data[i].nombre}...` });
+                    try { 
+                        await callGreenApi(data[i]); 
+                        success++; 
+                        await new Promise(r => setTimeout(r, 1500)); 
+                    } catch (e) { console.error(e); }
+                }
+                setIsSending(false);
+                alert(`Proceso masivo terminado. Enviados con éxito: ${success}`);
+            };
+
+            const processFile = (file) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const workbook = XLSX.read(e.target.result, { type: 'binary' });
+                    const raw = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                    const formatted = raw.map((row, i) => {
+                        const id = `AP${String(i + 1).padStart(4, '0')}`;
+                        const nombre = row.Nombre || row.nombre || 'N/A';
+                        const pareja = row['nombre pareja'] || row['pareja'] || 'N/A';
+                        const contacto = String(row.Contacto || row.contacto || '').replace(/\s+/g, '');
+                        const qrData = `ID: ${id}\nInvitado: ${nombre}\nPareja: ${pareja}\nContacto: ${contacto}`;
+                        return {
+                            id, nombre, pareja, contacto, status: 'No escaneada',
+                            qrUrl: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qrData)}`
+                        };
+                    });
+                    setData(formatted);
+                };
+                reader.readAsBinaryString(file);
+            };
+
+            const filteredData = data.filter(item => 
+                item.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                item.id.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+
+            return (
+                <div className="min-h-screen">
+                    {/* Navbar */}
+                    <nav className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-30 h-16 px-4 flex items-center justify-between shadow-sm">
+                        <div className="flex items-center space-x-2">
+                            <div className="bg-rose-500 p-1.5 rounded-lg text-white shadow-md">
+                                <Icon name="heart" size={18} />
+                            </div>
+                            <span className="text-lg font-black tracking-tighter uppercase text-slate-800">Amor Intencional</span>
+                        </div>
+                        <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200">
+                            <button onClick={() => setView('list')} className={`px-5 py-1.5 rounded-xl text-xs font-black transition-all ${view === 'list' ? 'bg-white shadow-sm text-rose-600' : 'text-slate-500'}`}>LISTADO</button>
+                            <button onClick={() => setView('scanner')} className={`px-5 py-1.5 rounded-xl text-xs font-black transition-all ${view === 'scanner' ? 'bg-white shadow-sm text-rose-600' : 'text-slate-500'}`}>ESCÁNER</button>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                            <button onClick={() => setShowApiConfig(true)} className="p-2 text-slate-400 hover:text-rose-600"><Icon name="settings" size={18}/></button>
+                            {data.length > 0 && <button onClick={() => setData([])} className="p-2 text-slate-300 hover:text-red-500"><Icon name="trash-2" size={18}/></button>}
+                        </div>
+                    </nav>
+
+                    <main className="max-w-6xl mx-auto px-4 py-8">
+                        {data.length === 0 ? (
+                            <div className="max-w-xl mx-auto mt-12 text-center p-12 border-4 border-dashed rounded-[3rem] bg-white border-slate-200 shadow-xl">
+                                <div className="w-20 h-20 bg-rose-500 rounded-3xl flex items-center justify-center mx-auto mb-6 text-white shadow-lg shadow-rose-100">
+                                    <Icon name="upload" size={32} />
+                                </div>
+                                <h2 className="text-2xl font-black mb-2 uppercase tracking-tighter">Amor Intencional</h2>
+                                <p className="text-slate-500 text-sm mb-10 leading-relaxed uppercase font-bold tracking-widest text-[10px]">Carga tu Excel: Nombre, Pareja, Contacto</p>
+                                <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => processFile(e.target.files[0])} accept=".xlsx, .xls" />
+                                <button onClick={() => fileInputRef.current.click()} className="w-full bg-slate-900 hover:bg-black text-white py-4 rounded-2xl font-black tracking-widest uppercase text-xs">Seleccionar Archivo</button>
+                            </div>
+                        ) : view === 'scanner' ? (
+                            <div className="max-w-md mx-auto space-y-6">
+                                <div className="relative aspect-square bg-black rounded-[2.5rem] overflow-hidden border-8 border-white shadow-2xl">
+                                    <div id="reader" className="w-full h-full grayscale-[0.3]"></div>
+                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                        <div className="w-64 h-64 border-2 border-white/20 rounded-3xl relative">
+                                            <div className="absolute inset-x-0 h-1 bg-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.8)] scan-line"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <p className="text-center text-slate-400 font-bold uppercase text-[10px] tracking-widest">Escáner Activo (Cámara Trasera)</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-6 animate-in fade-in">
+                                <div className="flex flex-col md:flex-row gap-4 justify-between items-center">
+                                    <div className="relative w-full md:w-96">
+                                        <Icon name="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
+                                        <input type="text" placeholder="Buscar invitado o ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-rose-50 text-sm font-bold" />
+                                    </div>
+                                    <button onClick={() => setShowMassSendConfirm(true)} className="bg-rose-500 hover:bg-rose-600 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center space-x-2"><Icon name="send" size={14}/><span>Envío Masivo</span></button>
+                                </div>
+
+                                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden overflow-x-auto">
+                                    <table className="w-full text-left">
+                                        <thead>
+                                            <tr className="bg-slate-50 border-b border-slate-200">
+                                                <th className="px-6 py-5 text-[9px] font-black text-slate-400 uppercase tracking-widest">ID</th>
+                                                <th className="px-6 py-5 text-[9px] font-black text-slate-400 uppercase tracking-widest">Invitado</th>
+                                                <th className="px-6 py-5 text-[9px] font-black text-slate-400 uppercase tracking-widest">Contacto</th>
+                                                <th className="px-6 py-5 text-[9px] font-black text-slate-400 uppercase tracking-widest text-center">Status</th>
+                                                <th className="px-6 py-5 text-[9px] font-black text-slate-400 uppercase tracking-widest text-center">Acciones</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {filteredData.map(g => (
+                                                <tr key={g.id} className="hover:bg-slate-50/50 transition-colors group">
+                                                    <td className="px-6 py-4 font-mono text-xs font-bold text-rose-600 uppercase tracking-tighter">{g.id}</td>
+                                                    <td className="px-6 py-4 font-bold text-sm text-slate-700">
+                                                        {g.nombre}
+                                                        {g.pareja !== 'N/A' && <span className="block text-[10px] text-slate-400 font-normal italic">Pareja: {g.pareja}</span>}
+                                                    </td>
+                                                    <td className="px-6 py-4 font-mono text-xs text-slate-500">{g.contacto}</td>
+                                                    <td className="px-6 py-4 text-center">
+                                                        <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase border ${g.status === 'Escaneada' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100'}`}>{g.status}</span>
+                                                    </td>
+                                                    <td className="px-6 py-4 text-center">
+                                                        <div className="flex items-center justify-center space-x-2">
+                                                            <button onClick={() => setSelectedGuest(g)} className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all"><Icon name="qr-code" size={14}/></button>
+                                                            <button onClick={() => callGreenApi(g)} className="p-2 rounded-xl bg-emerald-50 text-emerald-500 hover:bg-emerald-600 hover:text-white transition-all"><Icon name="message-square" size={14}/></button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Overlay de Carga Masiva */}
+                    {isSending && (
+                        <div className="fixed inset-0 z-[100] bg-white/95 backdrop-blur-md flex flex-col items-center justify-center text-center">
+                            <Icon name="loader-2" size={48} className="animate-spin text-rose-600 mb-4" />
+                            <h2 className="text-xl font-black uppercase tracking-tighter">Procesando Envío</h2>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.3em] mb-8">{sendProgress.current} de {sendProgress.total}</p>
+                            <p className="font-mono text-[9px] text-rose-600 bg-rose-50 px-4 py-2 rounded-lg border border-rose-100">{sendProgress.status}</p>
+                        </div>
+                    )}
+
+                    {/* Modal Ajustes API */}
+                    {showApiConfig && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+                            <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-8 relative animate-in zoom-in-95">
+                                <button onClick={() => setShowApiConfig(false)} className="absolute top-6 right-6 text-slate-400"><Icon name="x" size={20}/></button>
+                                <h3 className="text-xl font-black mb-6 uppercase tracking-tight">Ajustes Green API</h3>
+                                <div className="space-y-4">
+                                    {['apiUrl', 'idInstance', 'apiTokenInstance'].map(key => (
+                                        <div key={key}>
+                                            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 block">{key}</label>
+                                            <input type={key.includes('Token') ? 'password' : 'text'} value={greenApiCreds[key]} onChange={e => setGreenApiCreds({...greenApiCreds, [key]: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-mono text-xs focus:ring-2 focus:ring-rose-500" />
+                                        </div>
+                                    ))}
+                                </div>
+                                <button onClick={() => setShowApiConfig(false)} className="w-full mt-6 bg-slate-900 text-white py-4 rounded-2xl font-black uppercase text-xs tracking-widest">Guardar</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Modal Confirmación Masivo */}
+                    {showMassSendConfirm && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+                            <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-10 text-center animate-in zoom-in-95">
+                                <div className="w-16 h-16 bg-rose-100 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="send" size={32}/></div>
+                                <h3 className="text-xl font-black mb-2 uppercase tracking-tighter">¿Enviar a todos?</h3>
+                                <p className="text-slate-500 text-sm mb-8 leading-relaxed font-medium uppercase text-[10px] tracking-wider">Se enviará la invitación multimedia a los {data.length} invitados.</p>
+                                <button onClick={handleMassSend} className="w-full bg-rose-500 text-white py-4 rounded-2xl font-black uppercase text-xs tracking-widest mb-3">SÍ, ENVIAR AHORA</button>
+                                <button onClick={() => setShowMassSendConfirm(false)} className="w-full text-slate-400 font-bold text-xs uppercase tracking-widest">Cancelar</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Modal Detalle QR */}
+                    {selectedGuest && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedGuest(null)}>
+                            <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-10 flex flex-col items-center animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                                <img src={selectedGuest.qrUrl} className="w-48 h-48 rounded-2xl mb-6 shadow-inner border border-slate-100" />
+                                <h3 className="text-lg font-black uppercase tracking-tighter">{selectedGuest.nombre}</h3>
+                                <p className="text-rose-600 font-black mb-8 tracking-widest uppercase">{selectedGuest.id}</p>
+                                <button onClick={() => setSelectedGuest(null)} className="w-full bg-slate-100 text-slate-400 py-3 rounded-2xl font-black uppercase text-xs">Cerrar</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Modal Scanner Result */}
+                    {scannerResult && (
+                        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-slate-900/90 backdrop-blur-md">
+                            <div className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden animate-in slide-in-from-bottom duration-300 shadow-2xl">
+                                <div className="p-10 text-center bg-rose-600 text-white">
+                                    <div className="mx-auto w-20 h-20 rounded-3xl flex items-center justify-center mb-4 bg-white/20 text-white"><Icon name="check-circle-2" size={40}/></div>
+                                    <h3 className="text-2xl font-black uppercase tracking-tight">Acceso Válido</h3>
+                                    <p className="opacity-70 font-mono text-sm mt-1 uppercase">{scannerResult.id}</p>
+                                </div>
+                                <div className="p-8 space-y-6">
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100"><p className="text-[10px] font-black text-slate-400 uppercase mb-1">Titular</p><p className="text-xs font-bold text-slate-800 truncate">{scannerResult.nombre}</p></div>
+                                        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100"><p className="text-[10px] font-black text-slate-400 uppercase mb-1">Pareja</p><p className="text-xs font-bold text-slate-800 truncate">{scannerResult.pareja}</p></div>
+                                    </div>
+                                    <button onClick={() => {
+                                        setData(prev => prev.map(g => g.id === scannerResult.id ? { ...g, status: 'Escaneada' } : g));
+                                        setScannerResult(null);
+                                    }} className="w-full bg-rose-600 text-white py-5 rounded-[1.5rem] font-black text-lg shadow-xl uppercase tracking-tighter">CONFIRMAR ENTRADA</button>
+                                    <button onClick={() => setScannerResult(null)} className="w-full text-slate-400 font-bold text-[10px] uppercase tracking-widest py-2">Volver</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
