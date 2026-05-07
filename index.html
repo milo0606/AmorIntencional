@@ -20,6 +20,13 @@
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        
+        /* Estilos para el fade out personalizado */
+        .notification-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        .notification-fade-out { animation: fadeOut 0.5s ease-in forwards; }
+        
+        @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -20px); } to { opacity: 1; transform: translate(-50%, 0); } }
+        @keyframes fadeOut { from { opacity: 1; transform: translate(-50%, 0); } to { opacity: 0; transform: translate(-50%, -10px); } }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900">
@@ -30,7 +37,6 @@
 
         /**
          * Componente de Icono Robusto
-         * Evita errores de DOM y permite clics en el padre
          */
         const Icon = ({ name, size = 18, className = "" }) => {
             const containerRef = useRef(null);
@@ -57,11 +63,11 @@
             const [selectedGuest, setSelectedGuest] = useState(null);
             const [scannerResult, setScannerResult] = useState(null);
             
-            // Modales y Notificaciones
+            // Estados de Modales y Notificación (con lógica de auto-hide)
             const [confirmModal, setConfirmModal] = useState({ show: false, guest: null });
-            const [notification, setNotification] = useState({ show: false, title: '', message: '', type: 'success' });
+            const [notification, setNotification] = useState({ show: false, title: '', message: '', type: 'success', exiting: false });
             
-            // Credenciales Green API
+            // Credenciales Green API actualizadas
             const [showApiConfig, setShowApiConfig] = useState(false);
             const [greenApiCreds, setGreenApiCreds] = useState({
                 apiUrl: 'https://7107.api.greenapi.com',
@@ -77,10 +83,33 @@
             const html5QrCodeRef = useRef(null);
             const isProcessingRef = useRef(false);
 
-            // Guardar datos en localStorage cuando cambien
+            // Guardar datos en localStorage
             useEffect(() => {
                 localStorage.setItem('guestData_amor_intencional', JSON.stringify(data));
             }, [data]);
+
+            /**
+             * Lógica de Auto-Desaparecer Mensajes
+             */
+            useEffect(() => {
+                if (notification.show && !notification.exiting) {
+                    const timer = setTimeout(() => {
+                        // Iniciar fase de fade out
+                        setNotification(prev => ({ ...prev, exiting: true }));
+                        
+                        // Ocultar del DOM después de que termine la animación (500ms)
+                        setTimeout(() => {
+                            setNotification(prev => ({ ...prev, show: false, exiting: false }));
+                        }, 500);
+                    }, 2000); // 2 segundos visible
+                    
+                    return () => clearTimeout(timer);
+                }
+            }, [notification.show, notification.exiting]);
+
+            const triggerNotification = (title, message, type = 'success') => {
+                setNotification({ show: true, title, message, type, exiting: false });
+            };
 
             // Gestión del Escáner
             const stopScanner = useCallback(async () => {
@@ -105,7 +134,8 @@
                         { fps: 15, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 },
                         (text) => {
                             const idMatch = text.match(/AP\d{4}/);
-                            const guest = data.find(g => g.id === (idMatch ? idMatch[0] : text));
+                            const guestId = idMatch ? idMatch[0] : text;
+                            const guest = data.find(g => g.id === guestId);
                             if (guest) setScannerResult(guest);
                         }
                     );
@@ -135,7 +165,7 @@
                 const caption = `Hola ${guest.nombre}${partner}, gracias por confirmar su asistencia, a continuación, los datos del evento:\n\n🆔 ${guest.id}\n📅 20 de noviembre 2026\n⌚ 7:00 PM\n\nInformación importante: Al llegar, presenta el código QR que te enviamos junto a este mensaje.`;
 
                 const cid = formatChatId(guest.contacto);
-                if (!cid) throw new Error(`Número de teléfono no válido: ${guest.contacto}`);
+                if (!cid) throw new Error(`Número no válido: ${guest.contacto}`);
 
                 try {
                     const res = await fetch(url, {
@@ -146,14 +176,11 @@
 
                     if (!res.ok) {
                         const errData = await res.json().catch(() => ({}));
-                        console.error(`[GreenAPI Error] Invitado: ${guest.nombre}`, errData);
+                        console.error(`[GreenAPI Error]`, errData);
                         throw new Error(errData.message || errData.details || `Error ${res.status}`);
                     }
                     return true;
-                } catch (e) {
-                    console.error(`[Fetch Error] Invitado: ${guest.nombre}`, e);
-                    throw e;
-                }
+                } catch (e) { throw e; }
             };
 
             const handleSingleSend = async (guest) => {
@@ -162,9 +189,9 @@
                 setSendProgress({ current: 1, total: 1, status: `Enviando a ${guest.nombre}...` });
                 try {
                     await callGreenApi(guest);
-                    setNotification({ show: true, title: '¡Enviado!', message: `La invitación llegó correctamente a ${guest.nombre}.`, type: 'success' });
+                    triggerNotification('¡Enviado!', `Invitación enviada a ${guest.nombre}.`, 'success');
                 } catch (e) {
-                    setNotification({ show: true, title: 'Error de API', message: e.message, type: 'error' });
+                    triggerNotification('Error de API', e.message, 'error');
                 } finally { setIsSending(false); }
             };
 
@@ -178,12 +205,10 @@
                         await callGreenApi(data[i]); 
                         ok++; 
                         await new Promise(r => setTimeout(r, 2000)); 
-                    } catch (e) {
-                        console.error(`[Mass Error] ${data[i].nombre}:`, e);
-                    }
+                    } catch (e) { console.error(`[Mass Error]`, e); }
                 }
                 setIsSending(false);
-                setNotification({ show: true, title: 'Proceso Finalizado', message: `Éxito: ${ok} de ${data.length}.`, type: 'success' });
+                triggerNotification('Proceso Finalizado', `Éxito: ${ok} de ${data.length}.`, 'success');
             };
 
             const processFile = (file) => {
@@ -198,15 +223,14 @@
                             const p = row['nombre pareja'] || row['pareja'] || 'N/A';
                             const c = String(row.Contacto || row.contacto || '').trim();
                             const qrData = `ID: ${id}\nInvitado: ${n}\nPareja: ${p}\nContacto: ${c}`;
-                            return { id, nombre: n, pareja: p, contacto: c, status: 'No escaneada',
+                            return { id, nombre: n, pareja: p, contacto: c, status: 'No Validado',
                                      qrUrl: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qrData)}` };
                         });
                         setData(newData);
-                        setNotification({ show: true, title: 'Lista Cargada', message: `Se han importado ${newData.length} invitados.`, type: 'success' });
+                        triggerNotification('Lista Cargada', `Se han importado ${newData.length} invitados.`, 'success');
                     } catch (err) {
-                        setNotification({ show: true, title: 'Error de Archivo', message: 'No se pudo leer el archivo Excel.', type: 'error' });
+                        triggerNotification('Error de Archivo', 'No se pudo leer el archivo Excel.', 'error');
                     } finally {
-                        // Limpiar el input para permitir volver a cargar el mismo archivo si se desea
                         if(globalFileInputRef.current) globalFileInputRef.current.value = "";
                     }
                 };
@@ -214,7 +238,7 @@
             };
 
             const clearAllData = () => {
-                if (window.confirm("¿Estás seguro de que deseas borrar toda la lista actual?")) {
+                if (window.confirm("¿Borrar toda la lista?")) {
                     setData([]);
                     localStorage.removeItem('guestData_amor_intencional');
                 }
@@ -224,18 +248,17 @@
                 if (globalFileInputRef.current) globalFileInputRef.current.click();
             };
 
+            const validateGuest = (id) => {
+                setData(prev => prev.map(g => g.id === id ? { ...g, status: 'Validado' } : g));
+                setScannerResult(null);
+                triggerNotification('Validación Exitosa', 'El ingreso ha sido registrado.', 'success');
+            };
+
             const filteredData = data.filter(g => g.nombre.toLowerCase().includes(searchTerm.toLowerCase()) || g.id.toLowerCase().includes(searchTerm.toLowerCase()));
 
             return (
                 <div className="min-h-screen">
-                    {/* Input Global Oculto */}
-                    <input 
-                        type="file" 
-                        className="hidden" 
-                        ref={globalFileInputRef} 
-                        onChange={(e) => { if(e.target.files[0]) processFile(e.target.files[0]) }} 
-                        accept=".xlsx, .xls" 
-                    />
+                    <input type="file" className="hidden" ref={globalFileInputRef} onChange={(e) => { if(e.target.files[0]) processFile(e.target.files[0]) }} accept=".xlsx, .xls" />
 
                     <nav className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-30 h-16 px-4 flex items-center justify-between shadow-sm">
                         <div className="flex items-center space-x-2">
@@ -259,8 +282,8 @@
                         {data.length === 0 ? (
                             <div className="max-w-xl mx-auto mt-12 text-center p-12 border-4 border-dashed rounded-[3rem] bg-white border-slate-200 shadow-xl">
                                 <div className="w-20 h-20 bg-rose-500 rounded-3xl flex items-center justify-center mx-auto mb-6 text-white shadow-lg shadow-rose-100"><Icon name="upload" size={32} /></div>
-                                <h2 className="text-2xl font-black mb-2 uppercase tracking-tighter text-slate-800 leading-none">Carga de Lista</h2>
-                                <p className="text-slate-500 text-xs mb-10 leading-relaxed uppercase font-bold tracking-widest mt-2 text-center">Archivo Excel: Nombre, Pareja, Contacto</p>
+                                <h2 className="text-2xl font-black mb-2 uppercase tracking-tighter text-slate-800">Carga de Lista</h2>
+                                <p className="text-slate-500 text-xs mb-10 leading-relaxed uppercase font-bold tracking-widest mt-2 text-center">Excel: Nombre, Pareja, Contacto</p>
                                 <button onClick={triggerFileInput} className="w-full bg-slate-900 hover:bg-black text-white py-4 rounded-2xl font-black tracking-widest uppercase text-xs shadow-xl active:scale-95 transition-all">Seleccionar Archivo</button>
                             </div>
                         ) : view === 'scanner' ? (
@@ -292,6 +315,7 @@
                                                 <th className="px-6 py-5">ID</th>
                                                 <th className="px-6 py-5">Invitado</th>
                                                 <th className="px-6 py-5">Contacto</th>
+                                                <th className="px-6 py-5 text-center">Status</th>
                                                 <th className="px-6 py-5 text-center">Acciones</th>
                                             </tr>
                                         </thead>
@@ -304,6 +328,9 @@
                                                         {g.pareja !== 'N/A' && <span className="block text-[10px] text-slate-400 font-normal italic truncate max-w-[150px]">Pareja: {g.pareja}</span>}
                                                     </td>
                                                     <td className="px-6 py-4 font-mono text-xs text-slate-500 tracking-tighter">{g.contacto}</td>
+                                                    <td className="px-6 py-4 text-center">
+                                                        <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase border ${g.status === 'Validado' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100'}`}>{g.status}</span>
+                                                    </td>
                                                     <td className="px-6 py-4 text-center">
                                                         <div className="flex items-center justify-center space-x-3">
                                                             <button onClick={() => setSelectedGuest(g)} className="p-2.5 rounded-xl bg-slate-50 text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all shadow-sm"><Icon name="qr-code" size={16}/></button>
@@ -319,32 +346,33 @@
                         )}
                     </main>
 
-                    {/* Modales Personalizados */}
+                    {/* Notificación con Fade Automático */}
+                    {notification.show && (
+                        <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-[100] w-[90%] max-w-sm ${notification.exiting ? 'notification-fade-out' : 'notification-fade-in'}`}>
+                            <div className={`p-4 rounded-2xl shadow-2xl border-l-8 flex items-start space-x-4 bg-white ${notification.type === 'success' ? 'border-emerald-500' : 'border-rose-500'}`}>
+                                <div className={`p-2 rounded-lg shrink-0 ${notification.type === 'success' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                                    <Icon name={notification.type === 'success' ? 'check-circle' : 'alert-circle'} size={24} />
+                                </div>
+                                <div className="flex-1 min-w-0 text-left">
+                                    <h4 className="font-black text-sm text-slate-800 uppercase tracking-tighter">{notification.title}</h4>
+                                    <p className="text-xs text-slate-500 mt-0.5 leading-relaxed truncate">{notification.message}</p>
+                                </div>
+                                <button onClick={() => setNotification({ ...notification, exiting: true })} className="text-slate-300 hover:text-slate-500"><Icon name="x" size={16} /></button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Otros Modales y Overlays */}
                     {confirmModal.show && (
                         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
                             <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-8 text-center animate-in zoom-in-95 duration-200">
                                 <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="message-square" size={32}/></div>
                                 <h3 className="text-xl font-black mb-2 uppercase tracking-tighter text-slate-800">¿Enviar Invitación?</h3>
-                                <p className="text-slate-500 text-sm mb-8 leading-relaxed">Enviar invitación con QR a <strong>{confirmModal.guest?.nombre}</strong>.</p>
+                                <p className="text-slate-500 text-sm mb-8 leading-relaxed">Enviar a <strong>{confirmModal.guest?.nombre}</strong>.</p>
                                 <div className="flex flex-col space-y-3">
                                     <button onClick={() => handleSingleSend(confirmModal.guest)} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg active:scale-95 transition-all">SÍ, ENVIAR</button>
-                                    <button onClick={() => setConfirmModal({ show: false, guest: null })} className="w-full text-slate-400 font-bold text-xs uppercase tracking-widest hover:text-slate-600 transition-colors py-2">Cancelar</button>
+                                    <button onClick={() => setConfirmModal({ show: false, guest: null })} className="w-full text-slate-400 font-bold text-xs uppercase tracking-widest py-2">Cancelar</button>
                                 </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {notification.show && (
-                        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] w-[90%] max-w-sm animate-in slide-in-from-top duration-300">
-                            <div className={`p-4 rounded-2xl shadow-2xl border-l-8 flex items-start space-x-4 bg-white ${notification.type === 'success' ? 'border-emerald-500' : 'border-rose-500'}`}>
-                                <div className={`p-2 rounded-lg shrink-0 ${notification.type === 'success' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                                    <Icon name={notification.type === 'success' ? 'check-circle' : 'alert-circle'} size={24} />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <h4 className="font-black text-sm text-slate-800 uppercase tracking-tighter">{notification.title}</h4>
-                                    <p className="text-xs text-slate-500 mt-0.5 leading-relaxed truncate">{notification.message}</p>
-                                </div>
-                                <button onClick={() => setNotification({ ...notification, show: false })} className="text-slate-300 hover:text-slate-500"><Icon name="x" size={16} /></button>
                             </div>
                         </div>
                     )}
@@ -362,7 +390,7 @@
                         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowApiConfig(false)}>
                             <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-8 relative animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
                                 <button onClick={() => setShowApiConfig(false)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-600 transition-colors"><Icon name="x" size={20}/></button>
-                                <h3 className="text-xl font-black mb-6 uppercase tracking-tight text-slate-800">Ajustes API</h3>
+                                <h3 className="text-xl font-black mb-6 uppercase tracking-tight text-slate-800 leading-tight">Ajustes API</h3>
                                 <div className="space-y-4 text-left">
                                     {['apiUrl', 'idInstance', 'apiTokenInstance'].map(k => (
                                         <div key={k}>
@@ -382,7 +410,7 @@
                                 <div className="w-16 h-16 bg-rose-100 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner"><Icon name="send" size={32}/></div>
                                 <h3 className="text-xl font-black mb-2 uppercase tracking-tighter text-slate-800">¿Enviar a todos?</h3>
                                 <p className="text-slate-500 text-sm mb-8 leading-relaxed font-medium uppercase text-[10px] tracking-wider text-center">Se enviarán las invitaciones con QR a los {data.length} registrados.</p>
-                                <button onClick={handleMassSend} className="w-full bg-rose-500 text-white py-4 rounded-2xl font-black uppercase text-xs tracking-widest mb-3 shadow-lg active:scale-95 transition-all">SÍ, ENVIAR AHORA</button>
+                                <button onClick={handleMassSend} className="w-full bg-rose-500 text-white py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg active:scale-95 transition-all">SÍ, ENVIAR AHORA</button>
                                 <button onClick={() => setShowMassSendConfirm(false)} className="w-full text-slate-400 font-bold text-xs uppercase tracking-widest">Cancelar</button>
                             </div>
                         </div>
@@ -411,17 +439,27 @@
                     {scannerResult && (
                         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-slate-900/90 backdrop-blur-md" onClick={() => setScannerResult(null)}>
                             <div className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden animate-in slide-in-from-bottom duration-300 shadow-2xl" onClick={e => e.stopPropagation()}>
-                                <div className="p-10 text-center bg-rose-600 text-white shadow-inner">
-                                    <div className="mx-auto w-20 h-20 rounded-3xl flex items-center justify-center mb-4 bg-white/20 text-white"><Icon name="check-circle-2" size={40}/></div>
-                                    <h3 className="text-2xl font-black uppercase tracking-tight leading-tight">Acceso Válido</h3>
+                                <div className={`p-10 text-center text-white shadow-inner ${scannerResult.status === 'Validado' ? 'bg-amber-600' : 'bg-rose-600'}`}>
+                                    <div className="mx-auto w-20 h-20 rounded-3xl flex items-center justify-center mb-4 bg-white/20 text-white">
+                                        <Icon name={scannerResult.status === 'Validado' ? "alert-circle" : "check-circle-2"} size={40}/>
+                                    </div>
+                                    <h3 className="text-2xl font-black uppercase tracking-tight leading-tight">
+                                        {scannerResult.status === 'Validado' ? 'Ya Validado' : 'Acceso Válido'}
+                                    </h3>
                                     <p className="opacity-70 font-mono text-sm mt-1 uppercase tracking-widest leading-none">{scannerResult.id}</p>
                                 </div>
                                 <div className="p-8 space-y-6">
-                                    <div className="grid grid-cols-2 gap-3">
+                                    <div className="grid grid-cols-2 gap-3 text-left">
                                         <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 shadow-sm"><p className="text-[10px] font-black text-slate-400 uppercase mb-1 truncate">Titular</p><p className="text-xs font-bold text-slate-800 truncate leading-none mt-1">{scannerResult.nombre}</p></div>
                                         <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 shadow-sm"><p className="text-[10px] font-black text-slate-400 uppercase mb-1 truncate">Pareja</p><p className="text-xs font-bold text-slate-800 truncate leading-none mt-1">{scannerResult.pareja}</p></div>
                                     </div>
-                                    <button onClick={() => { setData(prev => prev.map(g => g.id === scannerResult.id ? { ...g, status: 'Escaneada' } : g)); setScannerResult(null); }} className="w-full bg-rose-600 text-white py-5 rounded-[1.5rem] font-black text-lg shadow-xl uppercase tracking-tighter active:scale-95 transition-all">CONFIRMAR ENTRADA</button>
+                                    {scannerResult.status === 'Validado' ? (
+                                        <div className="bg-amber-50 border-2 border-amber-200 p-5 rounded-[1.5rem] text-center">
+                                            <p className="text-amber-800 font-black text-xs uppercase tracking-tighter">Este invitado ya ha sido validado anteriormente.</p>
+                                        </div>
+                                    ) : (
+                                        <button onClick={() => validateGuest(scannerResult.id)} className="w-full bg-rose-600 text-white py-5 rounded-[1.5rem] font-black text-lg shadow-xl uppercase tracking-tighter active:scale-95 transition-all">CONFIRMAR ENTRADA</button>
+                                    )}
                                     <button onClick={() => setScannerResult(null)} className="w-full text-slate-400 font-bold text-[10px] uppercase tracking-widest py-2 text-center hover:text-slate-600">Volver</button>
                                 </div>
                             </div>
